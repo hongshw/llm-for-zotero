@@ -46,7 +46,7 @@ import { normalizeSelectedText, setStatus } from "./textUtils";
 import { buildUI } from "./buildUI";
 import { setupHandlers } from "./setupHandlers";
 import { ensureConversationLoaded, getConversationKey } from "./chat";
-import { renderShortcuts } from "./shortcuts";
+import { renderShortcuts, runShortcutByLabel } from "./shortcuts";
 import { refreshChat } from "./chat";
 import {
   beginChatRenderCycle,
@@ -636,9 +636,14 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
     };
 
     if (selectedText || showAddTextInPopup) {
+      type PopupTextActionResult = {
+        inclusion: IncludeReaderSelectedTextResult;
+        panelBody: Element;
+      };
+
       let popupSentinelEl: HTMLElement | null = null;
       const addTextToPanel =
-        async (): Promise<IncludeReaderSelectedTextResult | null> => {
+        async (): Promise<PopupTextActionResult | null> => {
           const effectiveSelectedText =
             normalizeSelectedText(selectedText) ||
             resolveSelectedTextForPopupAction();
@@ -736,7 +741,7 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
                     pageLabel: popupPageLabel,
                   }
                 : null;
-            return await includeReaderSelectedText({
+            const inclusion = await includeReaderSelectedText({
               body: panelBody,
               conversationKey,
               selectedText: effectiveSelectedText,
@@ -745,11 +750,26 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
               initialLocation: selectedTextLocation,
               log: (message, ...args) => ztoolkit.log(message, ...args),
             });
+
+            return { inclusion, panelBody };
           } catch (err) {
             ztoolkit.log("LLM: Add Text popup action failed", err);
             return null;
           }
         };
+
+      const runSelectedTextShortcut = async (
+        shortcutLabel: string,
+      ): Promise<boolean> => {
+        const result = await addTextToPanel();
+
+        if (!result || !result.inclusion.added) {
+          return false;
+        }
+
+        return runShortcutByLabel(result.panelBody, shortcutLabel);
+      };
+
       const stripPopupRowChrome = (
         row: HTMLElement | null,
         hideRow: boolean = false,
@@ -816,10 +836,11 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
             e.preventDefault();
             e.stopPropagation();
             void addTextToPanel().then((result) => {
+              const inclusion = result?.inclusion;
               if (
-                !result ||
-                result.outcome === "no-selection" ||
-                result.outcome === "invalid-target"
+                !inclusion ||
+                inclusion.outcome === "no-selection" ||
+                inclusion.outcome === "invalid-target"
               ) {
                 showAddTextUnavailable();
               }
@@ -846,6 +867,83 @@ function getReaderSelectionTrackingHandler(): ReaderTextSelectionPopupHandler {
           event.append(addTextBtn);
           popupSentinelEl = addTextBtn;
           stripPopupRowChrome(addTextBtn.parentElement as HTMLElement | null);
+
+          const translateBtn = event.doc.createElementNS(
+            "http://www.w3.org/1999/xhtml",
+            "button",
+          ) as HTMLButtonElement;
+
+          translateBtn.type = "button";
+          translateBtn.textContent = "Translate";
+          translateBtn.title =
+            "Add selected text to the LLM panel and run the Translate quick action";
+
+          translateBtn.style.cssText = [
+            "display:block",
+            "width:100%",
+            "margin:0",
+            "padding:6px 8px",
+            "box-sizing:border-box",
+            "border:1px solid rgba(130,130,130,0.38)",
+            "border-radius:6px",
+            "background:rgba(255,255,255,0.04)",
+            "color:inherit",
+            "font-size:12px",
+            "line-height:1.25",
+            "text-align:center",
+            "cursor:pointer",
+          ].join(";");
+
+          let translateHandled = false;
+
+          const showTranslateUnavailable = () => {
+            translateBtn.textContent = "Translate unavailable";
+            translateBtn.title =
+              "Selected text could not be added, or the Translate quick action was not found";
+            translateBtn.disabled = true;
+            translateBtn.style.cursor = "not-allowed";
+          };
+
+          const handleTranslateAction = (e: Event) => {
+            if (translateHandled) return;
+
+            translateHandled = true;
+            e.preventDefault();
+            e.stopPropagation();
+
+            void runSelectedTextShortcut("Translate")
+              .then((success) => {
+                if (!success) {
+                  ztoolkit.log(
+                    "LLM: Translate popup action skipped or Translate quick action unavailable",
+                  );
+                  showTranslateUnavailable();
+                }
+              })
+              .catch((err) => {
+                ztoolkit.log("LLM: Translate popup action failed", err);
+                showTranslateUnavailable();
+              });
+          };
+
+          translateBtn.addEventListener("pointerdown", (e: Event) => {
+            if (!isPrimaryButton(e)) return;
+            handleTranslateAction(e);
+          });
+
+          translateBtn.addEventListener("mousedown", (e: Event) => {
+            if (!isPrimaryButton(e)) return;
+            handleTranslateAction(e);
+          });
+
+          translateBtn.addEventListener("click", handleTranslateAction);
+          translateBtn.addEventListener("command", handleTranslateAction);
+
+          event.append(translateBtn);
+
+          stripPopupRowChrome(
+            translateBtn.parentElement as HTMLElement | null,
+          );
         } catch (err) {
           ztoolkit.log("LLM: failed to append Add Text popup button", err);
         }

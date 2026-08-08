@@ -62,6 +62,30 @@ export async function loadShortcutText(file: string): Promise<string> {
   return text;
 }
 
+export function runShortcutByLabel(
+  body: Element,
+  label: string,
+): boolean {
+  const targetLabel = label.trim().toLowerCase();
+  if (!targetLabel) return false;
+
+  const buttons = Array.from(
+    body.querySelectorAll(".llm-shortcut-btn"),
+  ) as HTMLButtonElement[];
+
+  const target = buttons.find((button) => {
+    const buttonLabel = (button.dataset.label || "")
+      .trim()
+      .toLowerCase();
+    return buttonLabel === targetLabel;
+  });
+
+  if (!target || target.disabled) return false;
+
+  target.click();
+  return true;
+}
+
 export async function renderShortcuts(
   body: Element,
   item?: Zotero.Item | null,
